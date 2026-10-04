@@ -1,6 +1,11 @@
 name: Race Edge collect
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/**'
+      - '.github/workflows/collect.yml'
   schedule:
     - cron: "*/15 0-14 * * *"
 permissions:
