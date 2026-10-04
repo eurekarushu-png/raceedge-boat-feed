@@ -107,6 +107,24 @@ const feed={schema:"raceedge-feed-1",generatedAt:new Date().toISOString(),date,s
 for(const jcd of Object.keys(venues))for(let race=1;race<=12;race++){try{const [e,x,o,r]=await Promise.all([get("racelist",jcd,race),get("beforeinfo",jcd,race),get("odds3t",jcd,race),get("raceresult",jcd,race)]);const a=racers(e,jcd,race),b=exhibition(x,jcd,race),c=odds3t(o,jcd,race),d=result(r,jcd,race);if(a)feed.entries.push(a);if(b)feed.exhibition.push(b);if(c)feed.odds.push(c);if(d)feed.results.push(d)}catch(e){console.warn("collector",jcd,race,e.message)}await sleep(180)}
 await fs.mkdir("public",{recursive:true});
 const counts={entries:feed.entries.length,exhibition:feed.exhibition.length,odds:feed.odds.length,results:feed.results.length};
+const pagesBase="https://eurekarushu-png.github.io/raceedge-boat-feed";
+let historyIndex={schema:"raceedge-history-1",updatedAt:feed.generatedAt,dates:[]};
+try{
+ const r=await fetch(`${pagesBase}/history/index.json?t=${Date.now()}`,{cache:"no-store"});
+ if(r.ok){const j=await r.json();if(Array.isArray(j?.dates))historyIndex=j}
+}catch(e){console.warn("history index restore",e.message)}
+const keepDates=[...new Set([...(historyIndex.dates||[]),date])].sort().slice(-60);
+await fs.mkdir("public/history",{recursive:true});
+for(const d of keepDates){
+ if(d===date)continue;
+ try{
+  const r=await fetch(`${pagesBase}/history/${d}.json?t=${Date.now()}`,{cache:"no-store"});
+  if(r.ok)await fs.writeFile(`public/history/${d}.json`,await r.text());
+ }catch(e){console.warn("history restore",d,e.message)}
+}
+await fs.writeFile(`public/history/${date}.json`,JSON.stringify(feed,null,2));
+historyIndex={schema:"raceedge-history-1",updatedAt:feed.generatedAt,dates:keepDates};
+await fs.writeFile("public/history/index.json",JSON.stringify(historyIndex,null,2));
 await fs.writeFile("public/raceedge-feed.json",JSON.stringify(feed,null,2));
 await fs.writeFile("public/status.json",JSON.stringify({ok:true,date,generatedAt:feed.generatedAt,counts,diagnostics},null,2));
 console.log("Race Edge feed counts",counts.entries,counts.exhibition,counts.odds,counts.results);
