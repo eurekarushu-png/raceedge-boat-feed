@@ -6,10 +6,10 @@ const decode=s=>s.replace(/&nbsp;|&#160;/gi," ").replace(/&yen;|&#165;/gi,"¥").
 const clean=h=>decode(h).replace(/<script[\s\S]*?<\/script>/gi," ").replace(/<style[\s\S]*?<\/style>/gi," ").replace(/<br\s*\/?>/gi," ").replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim();
 const num=v=>v==null?null:Number(String(v).replaceAll(",",""));
 const normName=s=>s.replace(/\s+/g," ").trim();
-const diagnostics={version:"2.4",requests:0,httpErrors:0,parseMiss:{entries:0,exhibition:0,odds:0,results:0},samples:{}};
+const diagnostics={version:"2.5",requests:0,httpErrors:0,parseMiss:{entries:0,exhibition:0,odds:0,results:0},samples:{}};
 async function get(page,jcd,rno){
  const u=`https://www.boatrace.jp/owpc/pc/race/${page}?hd=${hd}&jcd=${jcd}&rno=${rno}`; diagnostics.requests++;
- const r=await fetch(u,{headers:{"user-agent":"Mozilla/5.0 (compatible; RaceEdge-Free-Collector/2.4)",accept:"text/html,application/xhtml+xml"}});
+ const r=await fetch(u,{headers:{"user-agent":"Mozilla/5.0 (compatible; RaceEdge-Free-Collector/2.5)",accept:"text/html,application/xhtml+xml"}});
  if(!r.ok){diagnostics.httpErrors++;return null} const html=await r.text(); return {html,text:clean(html),url:u};
 }
 function racers(src,jcd,race){
@@ -32,17 +32,45 @@ function exhibition(src,jcd,race){
  return {date,jcd,venue:venues[jcd],race,boats:rows,source:"BOAT RACE official",fetchedAt:new Date().toISOString()};
 }
 function odds3t(src,jcd,race){
- if(!src)return null; const t=src.text,values={}; let m;
- // Pattern A: explicit 1-2-3 12.3 style.
- const explicit=/([1-6])\s*[-－]\s*([1-6])\s*[-－]\s*([1-6])\s+(\d+(?:\.\d+)?)/g;
- while((m=explicit.exec(t)))if(new Set([m[1],m[2],m[3]]).size===3)values[`${m[1]}-${m[2]}-${m[3]}`]=num(m[4]);
- // Pattern B: official odds HTML commonly carries combination identifiers in attributes/classes next to the odds value.
- if(Object.keys(values).length<100){const h=decode(src.html); const attr=/(?:data-(?:combination|kumi|odds)|id|class)=["'][^"']*?([1-6])[-_]?([1-6])[-_]?([1-6])[^"']*["'][^>]*>[\s\S]{0,180}?(\d+(?:\.\d+)?)/gi; while((m=attr.exec(h))){if(new Set([m[1],m[2],m[3]]).size===3)values[`${m[1]}-${m[2]}-${m[3]}`]=num(m[4]);}}
- if(!Object.keys(values).length){diagnostics.parseMiss.odds++;if(!diagnostics.samples.odds)diagnostics.samples.odds=t.slice(Math.max(0,t.indexOf("3連単オッズ")),Math.max(0,t.indexOf("3連単オッズ"))+1800);return null}
- return {date,jcd,venue:venues[jcd],race,type:"trifecta",values,source:"BOAT RACE official",fetchedAt:new Date().toISOString()};
+ if(!src)return null;
+ const values={};
+ const h=decode(src.html);
+ let m;
+ // BOAT RACE official 3連単 table is laid out in six first-place columns.
+ // Each column contains 20 cells (4 third-place choices x 5 second-place groups).
+ // The HTML uses is-boatColor*/oddsPoint-style cells, so parse each first-place block
+ // from its table cells rather than expecting a literal "1-2-3" string.
+ const tableMatch=h.match(/3連単オッズ[\s\S]*?<table[^>]*>([\s\S]*?)<\/table>/i);
+ const table=tableMatch?tableMatch[1]:h;
+ // First try any explicit combination metadata retained by the official markup.
+ const meta=/(?:data-(?:combination|kumi|odds-no|bet)|name|id|class)=["'][^"']*?([1-6])[-_]?([1-6])[-_]?([1-6])[^"']*["'][^>]*>[\s\S]{0,120}?([0-9]+(?:\.[0-9]+)?)/gi;
+ while((m=meta.exec(table))){if(new Set([m[1],m[2],m[3]]).size===3)values[`${m[1]}-${m[2]}-${m[3]}`]=num(m[4]);}
+ // Current page also exposes the odds table as rows of numeric cells. Extract the
+ // table text and reconstruct the fixed official order: for each 1st boat, the
+ // remaining boats are 2nd-place groups, and each group lists the remaining 4 boats.
+ if(Object.keys(values).length<100){
+  const txt=clean(table);
+  const tokens=[...txt.matchAll(/(?<![\d.])([1-6]|\d{1,5}(?:\.\d+)?)(?![\d.])/g)].map(x=>x[1]);
+  const odds=tokens.filter(x=>/^\d+(?:\.\d+)?$/.test(x)&&Number(x)>=1.0).map(Number);
+  // Remove header-like integers conservatively by using the final 120 plausible odds.
+  const plausible=odds.filter(v=>v>=1.0&&v<100000);
+  if(plausible.length>=120){
+   const arr=plausible.slice(-120); let k=0;
+   for(let first=1;first<=6;first++){
+    const seconds=[1,2,3,4,5,6].filter(x=>x!==first);
+    for(const second of seconds){
+     const thirds=[1,2,3,4,5,6].filter(x=>x!==first&&x!==second);
+     for(const third of thirds)values[`${first}-${second}-${third}`]=arr[k++];
+    }
+   }
+  }
+ }
+ const n=Object.keys(values).length;
+ if(n<100){diagnostics.parseMiss.odds++;if(!diagnostics.samples.odds)diagnostics.samples.odds=clean(table).slice(0,2400);return null}
+ return {date,jcd,venue:venues[jcd],race,type:"trifecta",values,combinationCount:n,source:"BOAT RACE official",fetchedAt:new Date().toISOString()};
 }
 function result(src,jcd,race){if(!src)return null;const t=src.text,m=t.match(/3連単\s*([1-6])\s*[-－]\s*([1-6])\s*[-－]\s*([1-6])\s*[¥￥]\s*([\d,]+)/);if(!m){diagnostics.parseMiss.results++;return null}return {date,jcd,venue:venues[jcd],race,trifecta:`${m[1]}-${m[2]}-${m[3]}`,payout100:num(m[4]),winningMethod:(t.match(/決まり手\s*(逃げ|差し|まくり差し|まくり|抜き|恵まれ)/)||[])[1]||null,source:"BOAT RACE official",fetchedAt:new Date().toISOString()}}
-const feed={schema:"raceedge-feed-1",generatedAt:new Date().toISOString(),date,source:"BOAT RACE official via Race Edge GitHub collector 2.4",entries:[],exhibition:[],odds:[],results:[]};
+const feed={schema:"raceedge-feed-1",generatedAt:new Date().toISOString(),date,source:"BOAT RACE official via Race Edge GitHub collector 2.5",entries:[],exhibition:[],odds:[],results:[]};
 for(const jcd of Object.keys(venues))for(let race=1;race<=12;race++){try{const [e,x,o,r]=await Promise.all([get("racelist",jcd,race),get("beforeinfo",jcd,race),get("odds3t",jcd,race),get("raceresult",jcd,race)]);const a=racers(e,jcd,race),b=exhibition(x,jcd,race),c=odds3t(o,jcd,race),d=result(r,jcd,race);if(a)feed.entries.push(a);if(b)feed.exhibition.push(b);if(c)feed.odds.push(c);if(d)feed.results.push(d)}catch(e){console.warn("collector",jcd,race,e.message)}await sleep(180)}
 await fs.mkdir("public",{recursive:true});
 const counts={entries:feed.entries.length,exhibition:feed.exhibition.length,odds:feed.odds.length,results:feed.results.length};
