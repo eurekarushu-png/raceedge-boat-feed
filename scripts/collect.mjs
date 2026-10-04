@@ -6,14 +6,15 @@ const decode=s=>s.replace(/&nbsp;|&#160;/gi," ").replace(/&yen;|&#165;/gi,"¥").
 const clean=h=>decode(h).replace(/<script[\s\S]*?<\/script>/gi," ").replace(/<style[\s\S]*?<\/style>/gi," ").replace(/<br\s*\/?>/gi," ").replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim();
 const num=v=>v==null?null:Number(String(v).replaceAll(",",""));
 const normName=s=>s.replace(/\s+/g," ").trim();
-const diagnostics={version:"2.5",requests:0,httpErrors:0,parseMiss:{entries:0,exhibition:0,odds:0,results:0},samples:{}};
+const diagnostics={version:"2.6",requests:0,httpErrors:0,parseMiss:{entries:0,exhibition:0,odds:0,results:0},samples:{},entryDebug:{}};
 async function get(page,jcd,rno){
  const u=`https://www.boatrace.jp/owpc/pc/race/${page}?hd=${hd}&jcd=${jcd}&rno=${rno}`; diagnostics.requests++;
- const r=await fetch(u,{headers:{"user-agent":"Mozilla/5.0 (compatible; RaceEdge-Free-Collector/2.5)",accept:"text/html,application/xhtml+xml"}});
+ const r=await fetch(u,{headers:{"user-agent":"Mozilla/5.0 (compatible; RaceEdge-Free-Collector/2.6)",accept:"text/html,application/xhtml+xml"}});
  if(!r.ok){diagnostics.httpErrors++;return null} const html=await r.text(); return {html,text:clean(html),url:u};
 }
 function racers(src,jcd,race){
  if(!src)return null; const t=src.text,out=[];
+ if(jcd==="11"&&race===2){diagnostics.entryDebug={url:src.url,text:t.slice(0,12000),html:src.html.slice(0,30000)};}
  // Current official racelist: boat -> racerNo / class -> name -> branch/origin -> age/weight -> F/L/ST -> national/local -> motor/boat.
  const rx=/([1-6])\s+(\d{4})\s*\/\s*(A1|A2|B1|B2)\s+(.+?)\s+([^\s/]+)\s*\/\s*([^\s/]+)\s+(\d{1,2})歳\s*\/\s*([\d.]+)kg\s+F(\d+)\s+L(\d+)\s+(0?\.\d{2})\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+(\d+)\s+([\d.-]+)\s+([\d.-]+)\s+(\d+)\s+([\d.-]+)\s+([\d.-]+)/g;
  let m; while((m=rx.exec(t))&&out.length<6){out.push({boat:+m[1],racerNo:m[2],class:m[3],name:normName(m[4]),branch:m[5],origin:m[6],age:+m[7],weight:num(m[8]),F:+m[9],L:+m[10],avgST:num(m[11]),national:{winRate:num(m[12]),twoRate:num(m[13]),threeRate:num(m[14])},local:{winRate:num(m[15]),twoRate:num(m[16]),threeRate:num(m[17])},motor:{no:+m[18],twoRate:num(m[19]),threeRate:num(m[20])},boatStats:{no:+m[21],twoRate:num(m[22]),threeRate:num(m[23])}})}
@@ -70,7 +71,7 @@ function odds3t(src,jcd,race){
  return {date,jcd,venue:venues[jcd],race,type:"trifecta",values,combinationCount:n,source:"BOAT RACE official",fetchedAt:new Date().toISOString()};
 }
 function result(src,jcd,race){if(!src)return null;const t=src.text,m=t.match(/3連単\s*([1-6])\s*[-－]\s*([1-6])\s*[-－]\s*([1-6])\s*[¥￥]\s*([\d,]+)/);if(!m){diagnostics.parseMiss.results++;return null}return {date,jcd,venue:venues[jcd],race,trifecta:`${m[1]}-${m[2]}-${m[3]}`,payout100:num(m[4]),winningMethod:(t.match(/決まり手\s*(逃げ|差し|まくり差し|まくり|抜き|恵まれ)/)||[])[1]||null,source:"BOAT RACE official",fetchedAt:new Date().toISOString()}}
-const feed={schema:"raceedge-feed-1",generatedAt:new Date().toISOString(),date,source:"BOAT RACE official via Race Edge GitHub collector 2.5",entries:[],exhibition:[],odds:[],results:[]};
+const feed={schema:"raceedge-feed-1",generatedAt:new Date().toISOString(),date,source:"BOAT RACE official via Race Edge GitHub collector 2.6",entries:[],exhibition:[],odds:[],results:[]};
 for(const jcd of Object.keys(venues))for(let race=1;race<=12;race++){try{const [e,x,o,r]=await Promise.all([get("racelist",jcd,race),get("beforeinfo",jcd,race),get("odds3t",jcd,race),get("raceresult",jcd,race)]);const a=racers(e,jcd,race),b=exhibition(x,jcd,race),c=odds3t(o,jcd,race),d=result(r,jcd,race);if(a)feed.entries.push(a);if(b)feed.exhibition.push(b);if(c)feed.odds.push(c);if(d)feed.results.push(d)}catch(e){console.warn("collector",jcd,race,e.message)}await sleep(180)}
 await fs.mkdir("public",{recursive:true});
 const counts={entries:feed.entries.length,exhibition:feed.exhibition.length,odds:feed.odds.length,results:feed.results.length};
